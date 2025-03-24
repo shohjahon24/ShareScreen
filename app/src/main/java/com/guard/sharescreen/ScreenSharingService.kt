@@ -1,5 +1,6 @@
 package com.guard.sharescreen
 
+import android.Manifest
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,12 +10,18 @@ import android.content.Intent
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioPlaybackCaptureConfiguration
+import android.media.AudioRecord
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import android.view.Surface
 import android.view.WindowManager
+import androidx.annotation.RequiresPermission
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationCompat
 import io.socket.client.IO
@@ -54,38 +61,13 @@ class ScreenSharingService : Service() {
     private lateinit var signalingClient: SignalingClient
     private var surfaceViewRenderer: SurfaceViewRenderer? = null
 
-
     override fun onCreate() {
         super.onCreate()
-        mediaProjectionManager =
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjectionManager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         eglBase = EglBase.create()
         initializeWebRTC()
         initializeSignalingClient()
-        //  initializeSurfaceViewRenderer()
         startForegroundServiceNotification()
-    }
-
-    private fun initializeSurfaceViewRenderer() {
-        surfaceViewRenderer = SurfaceViewRenderer(this)
-        surfaceViewRenderer?.apply {
-            setMirror(false)
-            setEnableHardwareScaler(true)
-            init(eglBase!!.eglBaseContext, null)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-            setEnableHardwareScaler(true)
-        }
-
-        // Add the SurfaceViewRenderer to a view group for testing/debugging
-        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        val layoutParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, // Adjust for debugging overlay
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        )
-        windowManager.addView(surfaceViewRenderer, layoutParams)
     }
 
     private fun initializeWebRTC() {
@@ -97,13 +79,7 @@ class ScreenSharingService : Service() {
         )
 
         peerConnectionFactory = PeerConnectionFactory.builder()
-            .setVideoEncoderFactory(
-                DefaultVideoEncoderFactory(
-                    eglBase!!.eglBaseContext,
-                    true,
-                    true
-                )
-            )
+            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase!!.eglBaseContext, true, true))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase!!.eglBaseContext))
             .createPeerConnectionFactory()
 
@@ -120,48 +96,30 @@ class ScreenSharingService : Service() {
             enableDtlsSrtp = true
         }
 
-        peerConnection =
-            peerConnectionFactory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
-                override fun onIceCandidate(candidate: IceCandidate) {
-                    Log.d("WebRTC", "onIceCandidate: $candidate")
-                    signalingClient.sendIceCandidate(candidate)
-                }
+        peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
+            override fun onIceCandidate(candidate: IceCandidate) {
+                signalingClient.sendIceCandidate(candidate)
+            }
 
-                override fun onTrack(transceiver: RtpTransceiver) {
-                    Log.d("WebRTC", "onTrack: $transceiver")
-                }
+            override fun onTrack(transceiver: RtpTransceiver) {
+                Log.d("WebRTC", "Track received: ${transceiver.receiver.track()?.kind()}")
+            }
 
-                override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-                    Log.d("ScreenSharingService", "Connection state changed: $newState")
-                }
+            override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
+                Log.d("WebRTC", "Connection state changed: $newState")
+            }
 
-                override fun onSignalingChange(signalingState: PeerConnection.SignalingState) {}
-                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
-                    Log.d("WebRTC", "$state")
-                }
-
-                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
-                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
-                override fun onRenegotiationNeeded() {}
-                override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream?>) {
-          /*          initializeSurfaceViewRenderer()
-                    val track = receiver?.track() as? VideoTrack
-                    track?.addSink(surfaceViewRenderer)*/
-                }
-
-                override fun onDataChannel(dataChannel: DataChannel) {}
-                override fun onAddStream(stream: MediaStream) {
-                    Log.d("WebRTC", "onAddStream: $stream")
-                }
-
-                override fun onRemoveStream(stream: MediaStream) {}
-            })
-        peerConnection?.addTransceiver(
-            MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
-        )
-
+            override fun onSignalingChange(signalingState: PeerConnection.SignalingState) {}
+            override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {}
+            override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {}
+            override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
+            override fun onRenegotiationNeeded() {}
+            override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream?>) {}
+            override fun onDataChannel(dataChannel: DataChannel) {}
+            override fun onAddStream(stream: MediaStream) {}
+            override fun onRemoveStream(stream: MediaStream) {}
+        })
     }
 
     private fun initializeSignalingClient() {
@@ -188,32 +146,24 @@ class ScreenSharingService : Service() {
 
     private fun startForegroundServiceNotification() {
         val channelId = "ScreenSharingChannel"
-        val channelName = "Screen Sharing Service"
-
-        val notificationManager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channel = NotificationChannel(
-            channelId, channelName, NotificationManager.IMPORTANCE_LOW
-        )
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(channelId, "Screen Sharing", NotificationManager.IMPORTANCE_LOW)
         notificationManager.createNotificationChannel(channel)
 
         val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("Screen Sharing")
-            .setContentText("Sharing your screen")
+            .setContentText("Streaming your screen and audio")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .build()
 
         startForeground(1, notification)
     }
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startScreenCapture(resultCode: Int, data: Intent) {
         mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
-        Log.d("DDDD", "startScreenCapture: $mediaProjection")
 
-        val surfaceTextureHelper = SurfaceTextureHelper.create(
-            "ScreenCaptureThread",
-            eglBase!!.eglBaseContext
-        )
+        val surfaceTextureHelper = SurfaceTextureHelper.create("ScreenCaptureThread", eglBase!!.eglBaseContext)
 
         videoSource = peerConnectionFactory.createVideoSource(false)
         val videoCapturer = ScreenCapturerAndroid(
@@ -232,26 +182,21 @@ class ScreenSharingService : Service() {
             30
         )
 
-        Log.d("DDDD", "startScreenCapture: ${resources.displayMetrics.widthPixels}")
-
         videoTrack = peerConnectionFactory.createVideoTrack("SCREEN_SHARE_TRACK", videoSource)
         videoTrack?.setEnabled(true)
-        //   videoTrack?.addSink(surfaceViewRenderer)
 
-
-        //  peerConnection?.addTrack(videoTrack)
         val videoSender = peerConnection?.addTransceiver(
             videoTrack,
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY)
         )?.sender
-        val parameters = videoSender?.parameters
-        parameters?.encodings?.forEach {
+
+        val videoParams = videoSender?.parameters
+        videoParams?.encodings?.forEach {
             it.maxBitrateBps = 4_000_000
             it.minBitrateBps = 1_500_000
             it.maxFramerate = 30
         }
-        videoSender?.parameters = parameters
-
+        videoSender?.parameters = videoParams
 
         val displayMetrics = resources.displayMetrics
         virtualDisplay = mediaProjection?.createVirtualDisplay(
@@ -268,12 +213,69 @@ class ScreenSharingService : Service() {
             },
             null
         )
+
+        // ✅ INTERNAL AUDIO CAPTURE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val playbackConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection!!)
+                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                .build()
+
+            val audioFormat = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(44100)
+                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                .build()
+
+            val bufferSize = AudioRecord.getMinBufferSize(
+                44100,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+
+            val audioRecord = AudioRecord.Builder()
+                .setAudioPlaybackCaptureConfig(playbackConfig)
+                .setAudioFormat(audioFormat)
+                .setBufferSizeInBytes(bufferSize)
+                .build()
+
+            audioRecord.startRecording()
+
+            val audioSource = peerConnectionFactory.createAudioSource(MediaConstraints())
+            val audioTrack = peerConnectionFactory.createAudioTrack("INTERNAL_AUDIO_TRACK", audioSource)
+            audioTrack.setEnabled(true)
+            peerConnection?.addTrack(audioTrack)
+
+            Log.d("WebRTC", "Internal audio capture started")
+        } else {
+            Log.e("WebRTC", "Internal audio capture requires Android 10+")
+        }
+
         createAndSendOfferForScreenSharing()
+    }
 
-        Log.d("WebRTC", "Video track state: ${videoTrack?.enabled()}")
-        Log.d("WebRTC", "MediaProjection is active: ${mediaProjection != null}")
-        Log.d("WebRTC", "VirtualDisplay is active: ${virtualDisplay != null}")
+    private fun createAndSendOfferForScreenSharing() {
+        val mediaConstraints = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+        }
 
+        peerConnection?.createOffer(object : SdpObserverAdapter() {
+            override fun onCreateSuccess(description: SessionDescription) {
+                val modifiedSdp = description.description.replace(
+                    Regex("a=fmtp:(\\d+)\\s"),
+                    "a=fmtp:$1 x-google-start-bitrate=1600000; x-google-max-bitrate=4000000; x-google-min-bitrate=1500000;"
+                )
+
+                val sessionDescription = SessionDescription(description.type, modifiedSdp)
+                peerConnection?.setLocalDescription(SdpObserverAdapter(), sessionDescription)
+                signalingClient.sendOffer(sessionDescription)
+            }
+
+            override fun onCreateFailure(error: String) {
+                Log.e("WebRTC", "Failed to create offer: $error")
+            }
+        }, mediaConstraints)
     }
 
     fun stopScreenCapture() {
@@ -291,6 +293,7 @@ class ScreenSharingService : Service() {
         Log.d("ScreenSharingService", "Screen sharing stopped")
     }
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val resultCode = intent?.getIntExtra("resultCode", Activity.RESULT_CANCELED)
         val data = intent?.getParcelableExtra<Intent>("data")
@@ -298,50 +301,11 @@ class ScreenSharingService : Service() {
         if (resultCode == Activity.RESULT_OK && data != null) {
             startScreenCapture(resultCode, data)
         } else {
-            Log.d("ScreenSharingService", "Failed to start screen capture. Invalid parameters.")
+            Log.e("ScreenSharingService", "Invalid MediaProjection parameters")
         }
 
         return START_STICKY
     }
-
-    private fun createAndSendOfferForScreenSharing() {
-        val mediaConstraints = MediaConstraints().apply {
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))/*
-            mandatory.add(MediaConstraints.KeyValuePair("maxWidth", "${resources.displayMetrics.widthPixels}"))
-            mandatory.add(MediaConstraints.KeyValuePair("maxHeight", "${resources.displayMetrics.heightPixels}"))
-            mandatory.add(MediaConstraints.KeyValuePair("maxFrameRate", "30"))
-            mandatory.add(MediaConstraints.KeyValuePair("minFrameRate", "15"))*/
-
-
-            // Enable receiving video
-        }
-
-        peerConnection?.createOffer(object : SdpObserverAdapter() {
-            override fun onCreateSuccess(description: SessionDescription) {
-                // Optionally prioritize Opus or VP8/VP9 codecs
-                // Set the local description and send the offer
-                val modifiedSdp = description.description.replace(
-                    Regex("a=fmtp:(\\d+)\\s"),
-                    "a=fmtp:$1 x-google-start-bitrate=1600000; x-google-max-bitrate=4000000; x-google-min-bitrate=1500000;"
-                )
-
-
-                peerConnection?.setLocalDescription(
-                    SdpObserverAdapter(),
-                    SessionDescription(description.type, modifiedSdp)
-                )
-                signalingClient.sendOffer(SessionDescription(description.type, modifiedSdp))
-
-                //   Log.d("WebRTC", "Offer for screen sharing created and sent: ${description.description}")
-            }
-
-            override fun onCreateFailure(error: String) {
-                Log.e("WebRTC", "Failed to create offer for screen sharing: $error")
-            }
-        }, mediaConstraints)
-    }
-
 
     override fun onBind(intent: Intent?): IBinder? = null
 }
