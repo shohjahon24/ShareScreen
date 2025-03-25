@@ -1,13 +1,13 @@
 [versions]
-agp = "8.7.2"
-kotlin = "2.0.21"
+agp = "8.7.3"
+kotlin = "2.1.10"
 coreKtx = "1.15.0"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 lifecycleRuntimeKtx = "2.8.7"
-activityCompose = "1.9.3"
-composeBom = "2024.11.00"
+activityCompose = "1.10.1"
+composeBom = "2025.03.00"
 googleWebrtc = "1.0.30039"
 socketIoClient = "2.1.1"
 
