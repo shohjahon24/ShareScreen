@@ -1,5 +1,6 @@
 package com.guard.sharescreen
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
@@ -24,8 +25,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -37,67 +40,40 @@ import com.guard.sharescreen.ui.theme.ShareScreenTheme
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var screenCaptureLauncher: ActivityResultLauncher<Intent>
-    private lateinit var mediaProjectionManager: MediaProjectionManager
-
+    @SuppressLint("UnusedMaterial3ScaffoldPaddingParameter")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // requestOverlayPermission(this)
-
-        mediaProjectionManager =
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-
-        screenCaptureLauncher = registerForActivityResult(
-            ActivityResultContracts.StartActivityForResult()
-        ) { result ->
-            Log.d("MainActivity", "onCreate: ${result.data?.data}")
-            if (result.resultCode == RESULT_OK && result.data != null) {
-                Log.d("MainActivity", "Screen capture permission granted ${result.data!!.data}")
-                val intent = Intent(this, ScreenSharingService::class.java)
-                intent.putExtra("resultCode", result.resultCode)
-                intent.putExtra("data", result.data)
-                ContextCompat.startForegroundService(this, intent)
-            } else {
-                Log.e("MainActivity", "Screen capture permission denied or cancelled")
-            }
-        }
 
         setContent {
             ShareScreenTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    ScreenSharingControl({ startScreenCapture() }, { stopScreenCapture() })
+                Scaffold(modifier = Modifier.fillMaxSize()) {
+                    CameraSharingControl(
+                        onStartCameraSharing = { startCameraSharing() },
+                        onStopCameraSharing = { stopCameraSharing() }
+                    )
                 }
             }
         }
     }
 
-    private fun startScreenCapture() {
-        val captureIntent = mediaProjectionManager.createScreenCaptureIntent()
-        screenCaptureLauncher.launch(captureIntent)
+    private fun startCameraSharing() {
+        val intent = Intent(this, CameraSharingService::class.java)
+        ContextCompat.startForegroundService(this, intent)
     }
 
-    private fun stopScreenCapture() {
-        val intent = Intent(this, ScreenSharingService::class.java)
+    private fun stopCameraSharing() {
+        val intent = Intent(this, CameraSharingService::class.java)
         stopService(intent)
-    }
-
-    private fun requestOverlayPermission(context: Context) {
-        if (!Settings.canDrawOverlays(context)) {
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-                data = Uri.parse("package:${context.packageName}")
-            }
-            startActivity(intent)
-        }
     }
 }
 
-
 @Composable
-fun ScreenSharingControl(
-    onStartScreenSharing: () -> Unit, onStopScreenSharing: () -> Unit
+fun CameraSharingControl(
+    onStartCameraSharing: () -> Unit,
+    onStopCameraSharing: () -> Unit
 ) {
-    var isSharing = remember { mutableStateOf(false) }
+    var isSharing by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -107,19 +83,15 @@ fun ScreenSharingControl(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = if (isSharing.value) "Screen Sharing Active" else "Screen Sharing Inactive",
+            text = if (isSharing) "Camera Sharing Active" else "Camera Sharing Inactive",
             style = MaterialTheme.typography.bodyLarge
         )
         Spacer(modifier = Modifier.height(16.dp))
         Button(onClick = {
-            if (isSharing.value) {
-                onStopScreenSharing()
-            } else {
-                onStartScreenSharing()
-            }
-            isSharing.value = !isSharing.value
+            if (isSharing) onStopCameraSharing() else onStartCameraSharing()
+            isSharing = !isSharing
         }) {
-            Text(text = if (isSharing.value) "Stop Sharing" else "Start Sharing")
+            Text(text = if (isSharing) "Stop Sharing" else "Start Sharing")
         }
     }
 }
