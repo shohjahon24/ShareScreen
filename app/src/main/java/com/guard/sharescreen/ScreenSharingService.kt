@@ -287,7 +287,6 @@ class ScreenSharingService : Service() {
         videoTrack = null
         signalingClient.disconnect()
         stopSelf()
-        Log.d("ScreenSharingService", "Screen sharing stopped")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
